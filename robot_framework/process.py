@@ -47,6 +47,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     }
 
     response = requests.get( url, headers=headers)
+    response.raise_for_status()
     data = response.json()['data']
     
 
@@ -56,7 +57,6 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
     AktID = specific_content.get('application_id')
     IndsendelsesDato = specific_content.get('application_date')
-    orchestrator_connection.log_info(f'{IndsenderNavn}, {IndsenderMail}, {IndsenderID}, {IndsendelsesDato}, {AktID}')
 
     if any(x is None for x in [IndsenderNavn, IndsenderMail, IndsenderID, AktID, IndsendelsesDato]):
         orchestrator_connection.log_info('Missing information in application')
