@@ -98,7 +98,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     cur = conn.cursor()
     case_id = insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
     conn.commit()
-    orchestrator_connection.log_info(f"Oprettet sag id={case_id}")
+    orchestrator_connection.log_info(f"Oprettet sag id={AktID}")
 
     # ---------------- Here mail to applicant and sagsbehandler is sent
     SMTP_SERVER = "smtp.adm.aarhuskommune.dk"
