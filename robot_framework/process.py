@@ -77,7 +77,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     data = response.json()['data']
 
 
-    IndsenderNavn = data.get('navn_paa_ansoeger')
+    IndsenderNavn = encrypt(data.get('navn_paa_ansoeger'), encryptionkey)
     IndsenderMail = data.get('email')
     IndsenderID = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
