@@ -76,8 +76,8 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     entity = response.json()['entity']
     data = response.json()['data']
 
-
-    IndsenderNavn = encrypt(data.get('navn_paa_ansoeger'), encryptionkey)
+    IndsenderNavn = data.get('navn_paa_ansoeger')
+    IndsenderNavnencrypted = encrypt(data.get('navn_paa_ansoeger'), encryptionkey)
     IndsenderMail = data.get('email')
     IndsenderID = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
@@ -96,7 +96,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     conn = pyodbc.connect(conn_string)
     conn.autocommit = False
     cur = conn.cursor()
-    case_id = insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
+    case_id = insert_new_case(cur, data, IndsenderNavnencrypted, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
     conn.commit()
     orchestrator_connection.log_info(f"Oprettet sag id={AktID}")
 
