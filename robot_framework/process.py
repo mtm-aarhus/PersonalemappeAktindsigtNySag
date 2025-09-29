@@ -6,14 +6,37 @@ from email.message import EmailMessage
 import json
 import requests
 import pyodbc
+from datetime import datetime, timedelta, timezone
+import os, base64
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.backends import default_backend
 
-def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail):
+def encrypt(plaintext: str, key_b64: str) -> str:
+    """
+    Krypter plaintext med AES-CBC + PKCS7.
+    key_b64: Base64-encoded nøgle (skal give 16, 24 eller 32 bytes efter decode).
+    Returnerer: Base64-encoded IV + ciphertext.
+    """
+    key = base64.b64decode(key_b64)
+    iv = os.urandom(16)
+
+    padder = padding.PKCS7(128).padder()
+    padded_data = padder.update(plaintext.encode()) + padder.finalize()
+
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+
+    return base64.b64encode(iv + ciphertext).decode()
+
+def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AnmodningsID, Beskrivelse):
     # 1) cases
     cur.execute("""
-        INSERT INTO dbo.cases (citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel)
+        INSERT INTO dbo.cases (citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel, Beskrivelse)
         OUTPUT INSERTED.id
-        VALUES (?, ?, ?, ?, ?)
-    """, (IndsenderNavn, IndsenderID, IndsenderMail, "Modtaget", "Aktindsigt i personalemappe"))
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (IndsenderNavn, IndsenderID, IndsenderMail, "Ny", AnmodningsID , Beskrivelse))
     case_id = cur.fetchone()[0]
 
     # 2) case_journal_items (received)
@@ -22,23 +45,25 @@ def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail):
         VALUES (?, ?, ?, DEFAULT)
     """, (case_id, "received", json.dumps(data, ensure_ascii=False)))
 
-    # 3) caselogs
+    # 3) caselogs  — INKLUDÉR ET TZ-AWARE TIMESTAMP (UTC)
+    utc_now = datetime.now(timezone.utc)
     cur.execute("""
-        INSERT INTO dbo.caselogs (case_id, message, field, action, user)
-        VALUES (?, ?, ?, ?, ?)
-    """, (case_id, "Sag modtaget via formular", "status", "modtaget", "System"))
+        INSERT INTO dbo.caselogs ([case_id], [message], [field], [action], [user], [timestamp])
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (case_id, "Sag modtaget via formular", "status", "modtaget", "System", utc_now))
 
     return case_id
 
 def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement | None = None) -> None:
     orchestrator_connection.log_info('Started proces EmailNyPersonaleAktindsigt')
-    specific_content = json.loads(queue_element.data)
+
+    specific_content = json.loads(queue_element)
     AnmodningsID = specific_content.get('application_uuid')
 
     os2forms_user = orchestrator_connection.get_credential('OS2FormsAPI')
     os2formsURL = os2forms_user.username
     os2formsApiKey = os2forms_user.password
-    
+    encryptionkey = orchestrator_connection.get_credential('PersonalesagsEncryptionKey').password
 
     url = f"{os2formsURL}laura_salmonsen_aktindsigt_test/submission/{AnmodningsID}"
 
@@ -48,27 +73,30 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
 
     response = requests.get( url, headers=headers)
     response.raise_for_status()
+    entity = response.json()['entity']
     data = response.json()['data']
-    
 
-    IndsenderNavn = data.get('citizen_name')
-    IndsenderMail = data.get('citizen_mail')
-    IndsenderID = data.get('citizen_id')
+
+    IndsenderNavn = data.get('navn_paa_ansoeger')
+    IndsenderMail = data.get('email')
+    IndsenderID = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
-    AktID = specific_content.get('application_id')
-    IndsendelsesDato = specific_content.get('application_date')
+    AktID = entity.get('sid')[0].get('value')
+    ModtagerTekst = data.get('her_kan_du_konkretisere_din_anmodning', "")
+    dato_string = entity.get('completed')[0].get('value')
+    IndsendelsesDato = datetime.fromisoformat(dato_string).strftime("%d-%m-%Y %H:%M")
 
     if any(x is None for x in [IndsenderNavn, IndsenderMail, IndsenderID, AktID, IndsendelsesDato]):
         orchestrator_connection.log_info('Missing information in application')
         raise Exception
-    
+
     #----------------- Here the case details are sent to the database
-    sql_server = orchestrator_connection.get_constant("SqlServer").value  # fx "db01" el. "db01,1433"
-    conn_string = f"DRIVER={{SQL Server}};SERVER={sql_server};DATABASE=AKTINDSIGTIPERSONALEMAPPER;Trusted_Connection=yes;"
+    sql_server = orchestrator_connection.get_constant("SqlServer").value  
+    conn_string = f"DRIVER={{SQL Server}};SERVER={sql_server};DATABASE=AKTINDSIGTERPERSONALEMAPPER;Trusted_Connection=yes;"
     conn = pyodbc.connect(conn_string)
     conn.autocommit = False
     cur = conn.cursor()
-    case_id = insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail)
+    case_id = insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
     conn.commit()
     orchestrator_connection.log_info(f"Oprettet sag id={case_id}")
 
@@ -116,12 +144,12 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     """
     msg_anmoder = EmailMessage()
     msg_anmoder['To'] = IndsenderMail
-    msg['From'] = SCREENSHOT_SENDER
-    msg['Subject'] = subject_anmoder
-    msg.set_content("Please enable HTML to view this message.")
-    msg.add_alternative(html_anmoder, subtype='html')
-    msg['Reply-To'] = UdviklerMail
-    msg['Bcc'] = UdviklerMail
+    msg_anmoder['From'] = SCREENSHOT_SENDER
+    msg_anmoder['Subject'] = subject_anmoder
+    msg_anmoder.set_content("Please enable HTML to view this message.")
+    msg_anmoder.add_alternative(html_anmoder, subtype='html')
+    msg_anmoder['Reply-To'] = UdviklerMail
+    msg_anmoder['Bcc'] = UdviklerMail
 
     # Send the email using SMTP
     try:
