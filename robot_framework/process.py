@@ -52,7 +52,7 @@ def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, Anmodn
         VALUES (?, ?, ?, ?, ?, ?)
     """, (case_id, "Sag modtaget via formular", "status", "modtaget", "System", utc_now))
 
-    return case_id
+    return AnmodningsID
 
 def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement | None = None) -> None:
     orchestrator_connection.log_info('Started proces EmailNyPersonaleAktindsigt')
