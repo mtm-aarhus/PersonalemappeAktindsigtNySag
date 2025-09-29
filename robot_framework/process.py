@@ -57,7 +57,7 @@ def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, Anmodn
 def process(orchestrator_connection: OrchestratorConnection, queue_element: QueueElement | None = None) -> None:
     orchestrator_connection.log_info('Started proces EmailNyPersonaleAktindsigt')
 
-    specific_content = json.loads(queue_element)
+    specific_content = json.loads(queue_element.data)
     AnmodningsID = specific_content.get('application_uuid')
 
     os2forms_user = orchestrator_connection.get_credential('OS2FormsAPI')
