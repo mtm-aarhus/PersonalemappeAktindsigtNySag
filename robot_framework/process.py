@@ -33,10 +33,10 @@ def encrypt(plaintext: str, key_b64: str) -> str:
 def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AnmodningsID, Beskrivelse):
     # 1) cases
     cur.execute("""
-        INSERT INTO dbo.cases (citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel, Beskrivelse)
+        INSERT INTO dbo.cases (citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel, Beskrivelse, AktID)
         OUTPUT INSERTED.id
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (IndsenderNavn, IndsenderID, IndsenderMail, "Ny", AnmodningsID , Beskrivelse))
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (IndsenderNavn, IndsenderID, IndsenderMail, "Ny", f'Anmodning {AnmodningsID}' , Beskrivelse, AnmodningsID))
     case_id = cur.fetchone()[0]
 
     # 2) case_journal_items (received)
