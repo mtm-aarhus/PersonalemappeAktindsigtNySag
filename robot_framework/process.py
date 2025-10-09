@@ -115,7 +115,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     conn = pyodbc.connect(conn_string)
     conn.autocommit = False
     cur = conn.cursor()
-    aktid = insert_new_case(cur, data, IndsenderNavnencrypted, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
+    aktid = insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
     conn.commit()
     orchestrator_connection.log_info(f"Oprettet sag med aktid={aktid}")
 
