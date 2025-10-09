@@ -33,24 +33,43 @@ def encrypt(plaintext: str, key_b64: str) -> str:
 def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AnmodningsID, Beskrivelse):
     # 1) cases
     cur.execute("""
-        INSERT INTO dbo.cases (citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel, Beskrivelse, AktID)
-        OUTPUT INSERTED.id
+        INSERT INTO dbo.cases (
+            aktid, citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel, Beskrivelse
+        )
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (IndsenderNavn, IndsenderID, IndsenderMail, "Ny", f'Anmodning {AnmodningsID}' , Beskrivelse, AnmodningsID))
-    case_id = cur.fetchone()[0]
+    """, (
+        AnmodningsID,
+        IndsenderNavn,
+        IndsenderID,
+        IndsenderMail,
+        "Ny",
+        f'Anmodning {AnmodningsID}',
+        Beskrivelse
+    ))
 
     # 2) case_journal_items (received)
     cur.execute("""
-        INSERT INTO dbo.case_journal_items (case_id, item_type, payload, journal_status)
+        INSERT INTO dbo.case_journal_items (case_aktid, item_type, payload, journal_status)
         VALUES (?, ?, ?, DEFAULT)
-    """, (case_id, "received", json.dumps(data, ensure_ascii=False)))
+    """, (
+        AnmodningsID,
+        "received",
+        json.dumps(data, ensure_ascii=False)
+    ))
 
-    # 3) caselogs  — INKLUDÉR ET TZ-AWARE TIMESTAMP (UTC)
+    # 3) caselogs — inkl. UTC timestamp
     utc_now = datetime.now(timezone.utc)
     cur.execute("""
-        INSERT INTO dbo.caselogs ([case_id], [message], [field], [action], [user], [timestamp])
+        INSERT INTO dbo.caselogs (case_aktid, message, field, action, [user], [timestamp])
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (case_id, "Sag modtaget via formular", "status", "modtaget", "System", utc_now))
+    """, (
+        AnmodningsID,
+        "Sag modtaget via formular",
+        "status",
+        "modtaget",
+        "System",
+        utc_now
+    ))
 
     return AnmodningsID
 
@@ -96,9 +115,9 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     conn = pyodbc.connect(conn_string)
     conn.autocommit = False
     cur = conn.cursor()
-    case_id = insert_new_case(cur, data, IndsenderNavnencrypted, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
+    aktid = insert_new_case(cur, data, IndsenderNavnencrypted, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
     conn.commit()
-    orchestrator_connection.log_info(f"Oprettet sag id={AktID}")
+    orchestrator_connection.log_info(f"Oprettet sag med aktid={aktid}")
 
     # ---------------- Here mail to applicant and sagsbehandler is sent
     SMTP_SERVER = "smtp.adm.aarhuskommune.dk"
