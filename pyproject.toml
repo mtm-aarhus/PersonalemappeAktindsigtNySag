@@ -16,7 +16,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "OpenOrchestrator == 2.*",
+    "OpenOrchestrator == 1.*",
     "Pillow == 10.*",
     "pytz == 2024.2",
     "pyodbc == 5.2.0",
