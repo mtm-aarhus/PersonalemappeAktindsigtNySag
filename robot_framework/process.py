@@ -43,7 +43,7 @@ def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, Anmodn
         IndsenderID,
         IndsenderMail,
         "Ny",
-        f'Anmodning {AnmodningsID}',
+        AnmodningsID,
         Beskrivelse
     ))
 
