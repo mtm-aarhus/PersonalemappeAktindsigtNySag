@@ -12,6 +12,34 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
 
+def get_next_aktid(cur) -> str:
+    year = datetime.now().year
+
+    # Lås rækken for det pågældende år, så kun én transaktion ad gangen kan opdatere
+    cur.execute("""
+        SELECT current_value
+        FROM dbo.case_id_counter WITH (UPDLOCK, HOLDLOCK)
+        WHERE year = ?
+    """, (year,))
+    row = cur.fetchone()
+
+    if row is None:
+        current_value = 1
+        cur.execute("""
+            INSERT INTO dbo.case_id_counter (year, current_value)
+            VALUES (?, ?)
+        """, (year, current_value))
+    else:
+        current_value = row[0] + 1
+        cur.execute("""
+            UPDATE dbo.case_id_counter
+            SET current_value = ?
+            WHERE year = ?
+        """, (current_value, year))
+
+    # Format: ÅÅÅÅ-XXXX, justér som du vil
+    return f"{year}-{current_value:04d}"
+
 def encrypt(plaintext: str, key_b64: str) -> str:
     """
     Krypter plaintext med AES-CBC + PKCS7.
@@ -32,6 +60,7 @@ def encrypt(plaintext: str, key_b64: str) -> str:
 
 def insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AnmodningsID, Beskrivelse):
     # 1) cases
+    
     cur.execute("""
         INSERT INTO dbo.cases (
             aktid, citizen_name, citizen_id, citizen_email, status, PersonaleSagsTitel, Beskrivelse
@@ -100,12 +129,16 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     IndsenderMail = data.get('email')
     IndsenderID = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
-    AktID = entity.get('sid')[0].get('value')
+    sid = entity.get('sid')[0].get('value')
     ModtagerTekst = data.get('her_kan_du_konkretisere_din_anmodning', "")
     dato_string = entity.get('completed')[0].get('value')
     IndsendelsesDato = datetime.fromisoformat(dato_string).strftime("%d-%m-%Y %H:%M")
 
-    if any(x is None for x in [IndsenderNavn, IndsenderMail, IndsenderID, AktID, IndsendelsesDato]):
+    data_for_journal = data.copy()
+    data_for_journal["cpr_nummer_paa_ansoeger"] = IndsenderID
+
+
+    if any(x is None for x in [IndsenderNavn, IndsenderMail, IndsenderID, sid, IndsendelsesDato]):
         orchestrator_connection.log_info('Missing information in application')
         raise Exception
 
@@ -115,7 +148,8 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     conn = pyodbc.connect(conn_string)
     conn.autocommit = False
     cur = conn.cursor()
-    aktid = insert_new_case(cur, data, IndsenderNavn, IndsenderID, IndsenderMail, AktID, ModtagerTekst)
+    aktid = get_next_aktid(cur)
+    aktid = insert_new_case(cur, data_for_journal, IndsenderNavn, IndsenderID, IndsenderMail, aktid, ModtagerTekst)
     conn.commit()
     orchestrator_connection.log_info(f"Oprettet sag med aktid={aktid}")
 
@@ -128,7 +162,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     html = f"""
     <html>
     <body>
-        <p>Der er den {IndsendelsesDato} indsendt en ny anmodning om aktindsigt i en personalesag med AktID {AktID}. </p>
+        <p>Der er den {IndsendelsesDato} indsendt en ny anmodning om aktindsigt i en personalesag med AktID {aktid}. </p>
         <p>Du kan se sagen på linket herunder: </p>
         <p> LINK til sagen skal indsættes </p> 
     </body>
@@ -156,7 +190,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     <html>
     <body>
         <p>Kære {IndsenderNavn}, </p>
-        <p>Vi har den {IndsendelsesDato} modtaget din anmodning om aktindsigt i din personalemappe, og har givet anmodningen ID {AktID}. </p>
+        <p>Vi har den {IndsendelsesDato} modtaget din anmodning om aktindsigt i din personalemappe, og har givet anmodningen ID {aktid}. </p>
         <p>En medarbejder vil gå i gang med at se på din anmodning </p>
     </body>
     </html>
