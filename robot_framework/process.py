@@ -130,6 +130,9 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     os2formsURL = os2forms_user.username
     os2formsApiKey = os2forms_user.password
     encryptionkey = os.getenv('PersonaleIndsigtEncryptionKey')
+    if not encryptionkey:
+        orchestrator_connection.log_error('No encryptionkey')
+        return 
     SMTP_SERVER = "smtp.adm.aarhuskommune.dk"
     SMTP_PORT = 25
     SCREENSHOT_SENDER = "PersonaleAktindsigtssag@aarhus.dk"
