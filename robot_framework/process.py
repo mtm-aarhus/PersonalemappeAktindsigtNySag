@@ -147,7 +147,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
 
     IndsenderNavn = data.get('navn_paa_ansoeger')
     IndsenderMail = data.get('email')
-    IndsenderIDraw = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
+    IndsenderIDraw = data.get('cpr_nummer_paa_ansoeger')
     IndsenderID = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
     sid = entity.get('sid')[0].get('value')
