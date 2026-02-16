@@ -11,6 +11,24 @@ import os, base64
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
+def tjek_email(cur, citizen_id, citizen_email):
+    
+    birthday = citizen_id[:6]
+
+    cur.execute("""
+        SELECT Email
+        FROM FDW.pdb.PersonLight_udvidet
+        WHERE Fødselsdag = ?
+    """, birthday)
+
+    rows = cur.fetchall()
+
+    # Lav liste med kun emails
+    emails = [row[0] for row in rows]
+    if citizen_email in emails:
+        return True
+    else:
+        return False
 
 def get_next_aktid(cur) -> str:
     year = datetime.now().year
@@ -111,7 +129,10 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     os2forms_user = orchestrator_connection.get_credential('OS2FormsAPI')
     os2formsURL = os2forms_user.username
     os2formsApiKey = os2forms_user.password
-    encryptionkey = orchestrator_connection.get_credential('PersonalesagsEncryptionKey').password
+    encryptionkey = os.getenv('PersonaleIndsigtEncryptionKey')
+    SMTP_SERVER = "smtp.adm.aarhuskommune.dk"
+    SMTP_PORT = 25
+    SCREENSHOT_SENDER = "PersonaleAktindsigtssag@aarhus.dk"
 
     url = f"{os2formsURL}laura_salmonsen_aktindsigt_test/submission/{AnmodningsID}"
 
@@ -125,12 +146,12 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     data = response.json()['data']
 
     IndsenderNavn = data.get('navn_paa_ansoeger')
-    IndsenderNavnencrypted = encrypt(data.get('navn_paa_ansoeger'), encryptionkey)
     IndsenderMail = data.get('email')
+    IndsenderIDraw = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     IndsenderID = encrypt(data.get('cpr_nummer_paa_ansoeger'), encryptionkey)
     ModtagerMail = orchestrator_connection.get_constant('balas').value #Ændr til rigtig modtagermail fra HR
     sid = entity.get('sid')[0].get('value')
-    ModtagerTekst = data.get('her_kan_du_konkretisere_din_anmodning', "")
+    ModtagerTekst = encrypt(data.get('her_kan_du_konkretisere_din_anmodning', ""), encryptionkey)
     dato_string = entity.get('completed')[0].get('value')
     IndsendelsesDato = datetime.fromisoformat(dato_string).strftime("%d-%m-%Y %H:%M")
 
@@ -142,72 +163,101 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         orchestrator_connection.log_info('Missing information in application')
         raise Exception
 
-    #----------------- Here the case details are sent to the database
-    sql_server = orchestrator_connection.get_constant("SqlServer").value  
-    conn_string = f"DRIVER={{SQL Server}};SERVER={sql_server};DATABASE=AKTINDSIGTERPERSONALEMAPPER;Trusted_Connection=yes;"
-    conn = pyodbc.connect(conn_string)
-    conn.autocommit = False
-    cur = conn.cursor()
-    aktid = get_next_aktid(cur)
-    aktid = insert_new_case(cur, data_for_journal, IndsenderNavn, IndsenderID, IndsenderMail, aktid, ModtagerTekst)
-    conn.commit()
-    orchestrator_connection.log_info(f"Oprettet sag med aktid={aktid}")
+    #First we check if the email is right - if not, citizen receives email
+    sql_server_f = orchestrator_connection.get_constant("sqlserverf").value  
+    conn_string_f = f"DRIVER={{SQL Server}};SERVER={sql_server_f};DATABASE=FDW;Trusted_Connection=yes;"
+    conn_f = pyodbc.connect(conn_string_f)
+    conn_f.autocommit = False
+    cur_f = conn_f.cursor()
+    if not tjek_email(cur_f, citizen_id= IndsenderIDraw, citizen_email= IndsenderMail):
+      
+        orchestrator_connection.log_info('Mail does not correspond to birthday. Applicant emailed')
+        # ---------------- Here mail to applicant and sagsbehandler is sent
+        html_failed = f"""
+        <html>
+        <body>
+            <p>Den angivne mailadresse på din aktindsigtsanmodning matcher ikke til cpr-nummer. Tjek at du har brugt din egen aarhus-mail. </p>
+            <p>Kontakt HR hvis du har brug for hjælp.</p>
+        </body>
+        </html>
+        """
+        # Create the email message
+        UdviklerMail = orchestrator_connection.get_constant('balas').value
 
-    # ---------------- Here mail to applicant and sagsbehandler is sent
-    SMTP_SERVER = "smtp.adm.aarhuskommune.dk"
-    SMTP_PORT = 25
-    SCREENSHOT_SENDER = "PersonaleAktindsigtssag@aarhus.dk"
-    subject_sagsbehandler = "Ny anmodning om aktindsigt i personalesag"
+        msg_failed = EmailMessage()
+        msg_failed['To'] = IndsenderMail
+        msg_failed['From'] = SCREENSHOT_SENDER
+        msg_failed['Subject'] = "Forkert mailadresse angivet"
+        msg_failed.set_content("Please enable HTML to view this message.")
+        msg_failed.add_alternative(html_failed, subtype='html')
 
-    html = f"""
-    <html>
-    <body>
-        <p>Der er den {IndsendelsesDato} indsendt en ny anmodning om aktindsigt i en personalesag med AktID {aktid}. </p>
-        <p>Du kan se sagen på linket herunder: </p>
-        <p> LINK til sagen skal indsættes </p> 
-    </body>
-    </html>
-    """
-    # Create the email message
-    UdviklerMail = orchestrator_connection.get_constant('balas').value
+        # Send the email using SMTP
+        try:
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as smtp:
+                smtp.send_message(msg_failed)
+        except Exception as e:
+            orchestrator_connection.log_info(f"Failed to send error email: {e}")
 
-    msg = EmailMessage()
-    msg['To'] = ModtagerMail
-    msg['From'] = SCREENSHOT_SENDER
-    msg['Subject'] = subject_sagsbehandler
-    msg.set_content("Please enable HTML to view this message.")
-    msg.add_alternative(html, subtype='html')
-    msg['Reply-To'] = UdviklerMail
-    msg['Bcc'] = UdviklerMail
+    else:
+        #----------------- Here the case details are sent to the database
+        sql_server = orchestrator_connection.get_constant("SqlServer").value  
+        conn_string = f"DRIVER={{SQL Server}};SERVER={sql_server};DATABASE=AKTINDSIGTERPERSONALEMAPPER;Trusted_Connection=yes;"
+        conn = pyodbc.connect(conn_string)
+        conn.autocommit = False
+        cur = conn.cursor()
+        aktid = get_next_aktid(cur)
+        aktid = insert_new_case(cur, data_for_journal, IndsenderNavn, IndsenderID, IndsenderMail, aktid, ModtagerTekst)
+        conn.commit()
+        orchestrator_connection.log_info(f"Oprettet sag med aktid={aktid}")
 
-    # SMTP Configuration (from your provided details)
-    SMTP_SERVER = "smtp.adm.aarhuskommune.dk"
-    SMTP_PORT = 25
-    SCREENSHOT_SENDER = "PersonaleAktindsigtssag@aarhus.dk"
-    subject_anmoder = "Kvittering for modtagelse af anmodning om aktindsigt"
+        # ---------------- Here mail to applicant and sagsbehandler is sent
+        subject_sagsbehandler = "Ny anmodning om aktindsigt i personalesag"
 
-    html_anmoder = f"""
-    <html>
-    <body>
-        <p>Kære {IndsenderNavn}, </p>
-        <p>Vi har den {IndsendelsesDato} modtaget din anmodning om aktindsigt i din personalemappe, og har givet anmodningen ID {aktid}. </p>
-        <p>En medarbejder vil gå i gang med at se på din anmodning </p>
-    </body>
-    </html>
-    """
-    msg_anmoder = EmailMessage()
-    msg_anmoder['To'] = IndsenderMail
-    msg_anmoder['From'] = SCREENSHOT_SENDER
-    msg_anmoder['Subject'] = subject_anmoder
-    msg_anmoder.set_content("Please enable HTML to view this message.")
-    msg_anmoder.add_alternative(html_anmoder, subtype='html')
-    msg_anmoder['Reply-To'] = UdviklerMail
-    msg_anmoder['Bcc'] = UdviklerMail
+        html = f"""
+        <html>
+        <body>
+            <p>Der er den {IndsendelsesDato} indsendt en ny anmodning om aktindsigt i en personalesag med AktID {aktid}. </p>
+            <p>Du kan se sagen på linket herunder: </p>
+            <p> LINK til sagen skal indsættes </p> 
+        </body>
+        </html>
+        """
+        # Create the email message
+        UdviklerMail = orchestrator_connection.get_constant('balas').value
 
-    # Send the email using SMTP
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as smtp:
-            smtp.send_message(msg)
-            smtp.send_message(msg_anmoder)
-    except Exception as e:
-        orchestrator_connection.log_info(f"Failed to send success email: {e}")
+        msg = EmailMessage()
+        msg['To'] = ModtagerMail
+        msg['From'] = SCREENSHOT_SENDER
+        msg['Subject'] = subject_sagsbehandler
+        msg.set_content("Please enable HTML to view this message.")
+        msg.add_alternative(html, subtype='html')
+        msg['Reply-To'] = UdviklerMail
+        msg['Bcc'] = UdviklerMail
+
+        subject_anmoder = "Kvittering for modtagelse af anmodning om aktindsigt"
+
+        html_anmoder = f"""
+        <html>
+        <body>
+            <p>Kære {IndsenderNavn}, </p>
+            <p>Vi har den {IndsendelsesDato} modtaget din anmodning om aktindsigt i din personalemappe, og har givet anmodningen ID {aktid}. </p>
+            <p>En medarbejder vil gå i gang med at se på din anmodning </p>
+        </body>
+        </html>
+        """
+        msg_anmoder = EmailMessage()
+        msg_anmoder['To'] = IndsenderMail
+        msg_anmoder['From'] = SCREENSHOT_SENDER
+        msg_anmoder['Subject'] = subject_anmoder
+        msg_anmoder.set_content("Please enable HTML to view this message.")
+        msg_anmoder.add_alternative(html_anmoder, subtype='html')
+        msg_anmoder['Reply-To'] = UdviklerMail
+        msg_anmoder['Bcc'] = UdviklerMail
+
+        # Send the email using SMTP
+        try:
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as smtp:
+                smtp.send_message(msg)
+                smtp.send_message(msg_anmoder)
+        except Exception as e:
+            orchestrator_connection.log_info(f"Failed to send success email: {e}")
