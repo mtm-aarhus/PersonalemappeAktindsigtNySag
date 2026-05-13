@@ -204,6 +204,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
     else:
         #----------------- Here the case details are sent to the database
         sql_server = orchestrator_connection.get_constant("SqlServer").value  
+        personaleindsigturl = orchestrator_connection.get_constant('PersonaleIndsigtURL').value
         conn_string = f"DRIVER={{SQL Server}};SERVER={sql_server};DATABASE=AKTINDSIGTERPERSONALEMAPPER;Trusted_Connection=yes;"
         conn = pyodbc.connect(conn_string)
         conn.autocommit = False
@@ -221,7 +222,7 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         <body>
             <p>Der er den {IndsendelsesDato} indsendt en ny anmodning om aktindsigt i en personalesag med AktID {aktid}. </p>
             <p>Du kan se sagen på linket herunder: </p>
-            <p> LINK til sagen skal indsættes </p> 
+            <p>{personaleindsigturl}/sag/{aktid}</p> 
         </body>
         </html>
         """
@@ -235,7 +236,6 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         msg.set_content("Please enable HTML to view this message.")
         msg.add_alternative(html, subtype='html')
         msg['Reply-To'] = UdviklerMail
-        msg['Bcc'] = UdviklerMail
 
         subject_anmoder = "Kvittering for modtagelse af anmodning om aktindsigt"
 
@@ -255,7 +255,6 @@ def process(orchestrator_connection: OrchestratorConnection, queue_element: Queu
         msg_anmoder.set_content("Please enable HTML to view this message.")
         msg_anmoder.add_alternative(html_anmoder, subtype='html')
         msg_anmoder['Reply-To'] = UdviklerMail
-        msg_anmoder['Bcc'] = UdviklerMail
 
         # Send the email using SMTP
         try:
